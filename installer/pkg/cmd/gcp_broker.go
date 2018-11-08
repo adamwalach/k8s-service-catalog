@@ -44,11 +44,12 @@ const (
 	brokerSARole                   = "roles/servicebroker.operator"
 	gcpBrokerTemplateDir           = "templates/gcp/"
 	gcpBrokerDeprecatedTemplateDir = "templates/gcp-deprecated/"
+	gcpBrokerDefaultNamespace      = "google-auth"
 )
 
 var (
 	gcpBrokerDeprecatedFileNames = []string{"google-oauth-deployment", "service-account-secret"}
-	gcpBrokerFileNames           = []string{"namespace", "gcp-broker", "google-oauth-deployment", "service-account-secret", "google-oauth-rbac", "google-oauth-service-account"}
+	gcpBrokerFileNames           = []string{"namespace", "google-oauth-deployment", "service-account-secret", "google-oauth-rbac", "google-oauth-service-account", "gcp-broker"}
 
 	requiredAPIs = []string{
 		"servicebroker.googleapis.com",
@@ -125,7 +126,7 @@ func NewAddGCPBrokerCmd() *cobra.Command {
 	}
 
 	// add gcp-broker command flags
-	c.Flags().StringVar(&bc.Namespace, "namespace", "google-oauth", "Namespace for the GCP broker")
+	c.Flags().StringVar(&bc.Namespace, "namespace", gcpBrokerDefaultNamespace, "Namespace for the GCP broker")
 	c.Flags().StringVar(&bc.Scope, "scope", "cluster", "Scope of GCP broker: cluster or namespace")
 
 	return c
@@ -395,12 +396,17 @@ func cleanupNewKey(email, key string) {
 }
 
 func NewRemoveGCPBrokerCmd() *cobra.Command {
-	return &cobra.Command{
+	bc := &AddBrokerConfig{
+		Namespace: "service-catalog",
+		Scope:     "cluster",
+	}
+
+	c := &cobra.Command{
 		Use:   "remove-gcp-broker",
 		Short: "Remove the Service Broker",
 		Long:  `Removes Google Cloud Platform Service Broker from service catalog`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := removeGCPBroker(); err != nil {
+			if err := removeGCPBroker(bc); err != nil {
 				fmt.Println("Failed to remove the Service Broker")
 				return err
 			}
@@ -408,19 +414,35 @@ func NewRemoveGCPBrokerCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	// add gcp-broker command flags
+	c.Flags().StringVar(&bc.Namespace, "namespace", gcpBrokerDefaultNamespace, "Namespace for the GCP broker")
+	c.Flags().StringVar(&bc.Scope, "scope", "cluster", "Scope of GCP broker: cluster or namespace")
+
+	return c
 }
 
-func removeGCPBroker() error {
+func removeGCPBroker(bc *AddBrokerConfig) error {
 	// Create temporary directory for k8s artifacts and other temporary files.
 	dir, err := ioutil.TempDir("/tmp", "service-catalog-gcp")
 	if err != nil {
 		return fmt.Errorf("error creating temporary dir: %v", err)
 	}
 
-	defer os.RemoveAll(dir)
+	//defer os.RemoveAll(dir)
+	data := map[string]interface{}{
+		"Namespace": bc.Namespace,
+		"Scope":     bc.Scope,
+	}
+
+	//remove namespace template from the list if it's not the default one
+	if bc.Namespace != gcpBrokerDefaultNamespace {
+		i := 0 //position of the "namespace.tpl"
+		gcpBrokerFileNames = append(gcpBrokerFileNames[:i], gcpBrokerFileNames[i+1:]...)
+	}
 
 	// remove GCP Broker k8s resources
-	err = generateConfigs(dir, gcpBrokerTemplateDir, gcpBrokerFileNames, nil)
+	err = generateConfigs(dir, gcpBrokerTemplateDir, gcpBrokerFileNames, data)
 	if err != nil {
 		return fmt.Errorf("error generating configs for the Service Broker: %v", err)
 	}
@@ -514,6 +536,7 @@ func generateConfigs(genDir, templateDir string, filenames []string, data map[st
 
 func deployConfigs(dir string, filenames []string) error {
 	for _, f := range filenames {
+		fmt.Printf("Creating k8s recource using '%v' template\n", f)
 		output, err := exec.Command("kubectl", "apply", "-f", filepath.Join(dir, f+".yaml")).CombinedOutput()
 		// TODO: cleanup
 		if err != nil {
@@ -525,6 +548,7 @@ func deployConfigs(dir string, filenames []string) error {
 
 func removeConfigs(dir string, filenames []string) error {
 	for _, f := range filenames {
+		fmt.Printf("Removing k8s resource using '%v' template\n", f)
 		output, err := exec.Command("kubectl", "delete", "-f", filepath.Join(dir, f+".yaml"), "--ignore-not-found").CombinedOutput()
 		// TODO: cleanup
 		if err != nil {
