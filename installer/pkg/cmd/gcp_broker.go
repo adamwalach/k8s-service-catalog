@@ -95,13 +95,27 @@ var (
 	}
 )
 
+// AddBrokerConfig contains installation configuration.
+type AddBrokerConfig struct {
+	// namespace for gcp broker
+	Namespace string
+
+	// scope of installation (cluster or namespace)
+	Scope string
+}
+
 func NewAddGCPBrokerCmd() *cobra.Command {
-	return &cobra.Command{
+	bc := &AddBrokerConfig{
+		Namespace: "service-catalog",
+		Scope:     "cluster",
+	}
+
+	c := &cobra.Command{
 		Use:   "add-gcp-broker",
 		Short: "Adds the Service Broker",
 		Long:  `Adds Google Cloud Platfrom Service Broker to Service Catalog`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := addGCPBroker(); err != nil {
+			if err := addGCPBroker(bc); err != nil {
 				fmt.Println("Failed to configure the Service Broker")
 				return err
 			}
@@ -109,9 +123,15 @@ func NewAddGCPBrokerCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	// add gcp-broker command flags
+	c.Flags().StringVar(&bc.Namespace, "namespace", "google-oauth", "Namespace for the GCP broker")
+	c.Flags().StringVar(&bc.Scope, "scope", "cluster", "Scope of GCP broker: cluster or namespace")
+
+	return c
 }
 
-func addGCPBroker() error {
+func addGCPBroker(bc *AddBrokerConfig) error {
 	projectID, err := gcp.GetConfigValue("core", "project")
 	if err != nil {
 		return fmt.Errorf("error getting configured project value : %v", err)
@@ -141,6 +161,7 @@ func addGCPBroker() error {
 
 	// create temporary directory for k8s artifacts and other temporary files
 	dir, err := ioutil.TempDir("/tmp", "service-catalog-gcp")
+	fmt.Println("Tmpdir: " + dir)
 	if err != nil {
 		return fmt.Errorf("error creating temporary dir: %v", err)
 	}
@@ -167,6 +188,8 @@ func addGCPBroker() error {
 	data := map[string]interface{}{
 		"SvcAccountKey": key,
 		"GCPBrokerURL":  vb.URL,
+		"Namespace":     bc.Namespace,
+		"Scope":         bc.Scope,
 	}
 
 	// generate config files and deploy the GCP broker resources
@@ -190,7 +213,7 @@ func addGCPBroker() error {
 func enableRequiredAPIs(projectID string) error {
 	if err := gcp.EnableAPIs(requiredAPIs); err != nil {
 		var b bytes.Buffer
-		fmt.Fprintln(&b, "error enabling APIs. To make sure all APIs are correctly enabled, use links below:")
+		fmt.Fprintf(&b, "error enabling APIs: %v. To make sure all APIs are correctly enabled, use links below:\n", err)
 		for _, a := range requiredAPIs {
 			fmt.Fprintf(&b, "   %s: https://console.cloud.google.com/apis/library/%s/?project=%s\n", a, a, projectID)
 		}
